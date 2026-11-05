@@ -1,0 +1,4 @@
+# Bundle patch: adds the sticky-note board to the profile's layer stack.
+- insert:
+    - id: sticky-note
+      name: '@zhang/dsh-sticky-note'

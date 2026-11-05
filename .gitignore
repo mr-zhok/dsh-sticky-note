@@ -1,0 +1,6 @@
+node_modules/
+.dsh/
+AGENTS.local.md
+dist/
+*.tgz
+*.log

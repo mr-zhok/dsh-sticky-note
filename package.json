@@ -1,0 +1,35 @@
+{
+  "name": "@zhang/dsh-sticky-note",
+  "version": "1.0.0",
+  "private": true,
+  "description": "DSH 便签：左侧栏入口 + 四列便签板（暂存 / 待办 / 已办 / 临时废弃），黄色便签卡两列排布、可跨列拖动、双击看详情、悬停删除，数据全局一份。",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "icon.svg"
+  ],
+  "dsh": {
+    "engines": {
+      "dsh": ">=0.2.1-rc.2"
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-sidebar"
+      ]
+    }
+  }
+}
