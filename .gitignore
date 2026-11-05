@@ -4,3 +4,5 @@ AGENTS.local.md
 dist/
 *.tgz
 *.log
+# 本地截图素材，仅供 AI 识图，不进版本库
+图片/

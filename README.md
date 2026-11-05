@@ -66,4 +66,4 @@ $DSH_HOME\sticky-note\board.json
 
 ## 许可
 
-MIT
+[MIT](LICENSE) © 2026 mr-zhok

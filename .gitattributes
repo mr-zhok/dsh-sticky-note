@@ -1,0 +1,19 @@
+# 统一换行：仓库内一律 LF，Windows 检出也保持 LF（JS / MD / YML 不需要 CRLF）
+* text=auto eol=lf
+
+# 二进制资源，禁止换行转换与文本 diff
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.tgz binary
+*.zip binary
+
+# 文档与源码以文本方式 diff
+*.md text
+*.js text
+*.json text
+*.yml text
+*.svg text
