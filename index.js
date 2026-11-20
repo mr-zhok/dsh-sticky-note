@@ -19,6 +19,8 @@ const PREFIX = '/sticky-note'
 const COLS = ['stash', 'todo', 'done', 'trash']
 const MAX_TEXT = 2000
 const MAX_BODY_BYTES = 256 * 1024
+/** Floating-ball settings; `null` coordinates mean "anchored bottom-right". */
+const DEFAULT_UI = { ballEnabled: false, ballX: null, ballY: null }
 const LOOPBACK_HOST = /^(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/i
 
 export const name = 'sticky-note'
@@ -41,7 +43,18 @@ export function apply(ctx) {
   }
 
   function emptyBoard() {
-    return { version: 1, updatedAt: 0, notes: [] }
+    return { version: 1, updatedAt: 0, notes: [], ui: { ...DEFAULT_UI } }
+  }
+
+  /** Ball state survives a damaged or partial board; anything odd falls back. */
+  function normalizeUi(raw) {
+    const ui = raw && typeof raw === 'object' ? raw : {}
+    const coordinate = (value) => (Number.isFinite(value) ? Math.round(value) : null)
+    return {
+      ballEnabled: ui.ballEnabled === true,
+      ballX: coordinate(ui.ballX),
+      ballY: coordinate(ui.ballY),
+    }
   }
 
   function cleanText(value) {
@@ -91,12 +104,16 @@ export function apply(ctx) {
     } catch {
       return emptyBoard()
     }
-    if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.notes)) return emptyBoard()
+    if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.notes)) {
+      const blank = emptyBoard()
+      return { ...blank, ui: normalizeUi(parsed && parsed.ui) }
+    }
     const notes = tidy(parsed.notes.map((raw) => normalizeNote(raw, null)).filter(Boolean))
     return {
       version: 1,
       updatedAt: Number.isFinite(parsed.updatedAt) ? parsed.updatedAt : 0,
       notes,
+      ui: normalizeUi(parsed.ui),
     }
   }
 
@@ -117,9 +134,11 @@ export function apply(ctx) {
     const run = chain.then(() => {
       const board = readBoard()
       const next = work(board)
-      const { notes: rawNotes, ...extra } = next
+      const { notes: rawNotes, ui: rawUi, ...extra } = next
       const notes = tidy(rawNotes)
-      const saved = { version: 1, updatedAt: Date.now(), notes }
+      // A note mutation keeps the current ball settings unless it supplies new ones.
+      const ui = rawUi === undefined ? board.ui : normalizeUi(rawUi)
+      const saved = { version: 1, updatedAt: Date.now(), notes, ui }
       writeBoard(saved)
       return { ok: true, board: saved, ...extra }
     })
@@ -347,6 +366,20 @@ export function apply(ctx) {
         }
         return { notes: merged }
       })
+      sendJson(response, 200, result)
+      return
+    }
+
+    if (method === 'POST' && route === '/ui') {
+      const body = await readJsonBody(request)
+      const result = await mutate((board) => ({
+        notes: board.notes,
+        ui: {
+          ballEnabled: typeof body.ballEnabled === 'boolean' ? body.ballEnabled : board.ui.ballEnabled,
+          ballX: Number.isFinite(body.ballX) ? body.ballX : board.ui.ballX,
+          ballY: Number.isFinite(body.ballY) ? body.ballY : board.ui.ballY,
+        },
+      }))
       sendJson(response, 200, result)
       return
     }
