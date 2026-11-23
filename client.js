@@ -66,6 +66,13 @@ window.__ModuleLoader__.load({
 .dsn-dhead{display:flex;align-items:center;gap:8px}
 .dsn-dtitle{font-size:14px;font-weight:600}
 .dsn-x{margin-left:auto;width:22px;height:22px;border-radius:6px;display:flex;align-items:center;justify-content:center;border:0;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer;font-size:15px;line-height:1}
+/* Sits right after the title, not at the far right: the × keeps the auto
+   margin, so the two never collide. */
+.dsn-edit{width:22px;height:22px;border-radius:6px;flex:0 0 22px;display:flex;align-items:center;justify-content:center;margin-left:2px;
+  border:1px solid rgba(53,196,106,.5);background:rgba(53,196,106,.1);color:#5FD98A;cursor:pointer;padding:0;transition:background .15s,border-color .15s}
+.dsn-edit:hover{background:rgba(53,196,106,.22);border-color:rgba(53,196,106,.8)}
+.dsn-edit:focus-visible{outline:2px solid rgba(53,196,106,.75);outline-offset:2px}
+.dsn-edit svg{width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
 .dsn-dsub{font-size:12px;color:var(--dsw-alias-label-secondary);margin:4px 0 14px}
 .dsn-paper{display:block;width:100%;height:338px;box-sizing:border-box;background:#FFF7BC;border:1px solid #E4D089;border-radius:3px;padding:12px 14px;color:#4A4433;font-size:13px;line-height:22px;font-family:inherit;resize:none;outline:none;white-space:pre-wrap}
 .dsn-paper::placeholder{color:#9D9166}
@@ -456,6 +463,17 @@ window.__ModuleLoader__.load({
         setRowOffset(Math.max(0, Math.ceil(count / 2) - 2))
       }, [])
 
+      /** Save an edited note. Returns false when the write failed, so the
+       *  dialog can stay in edit mode instead of silently dropping the text. */
+      const saveEdit = useCallback(async (id, text) => {
+        try {
+          await updateNote(id, text)
+          return true
+        } catch {
+          return false
+        }
+      }, [])
+
       if (!ui.ballEnabled) return null
 
       const canLeft = colIndex > 0
@@ -567,6 +585,7 @@ window.__ModuleLoader__.load({
             note: detailNote,
             readOnly: true,
             onClose: () => setDetailId(null),
+            onSave: saveEdit,
           })
           : null,
         addCol
@@ -814,39 +833,52 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * Note detail. Two modes share one shell:
-     *  - editable (the board's double-click): textarea + 删除 / 关闭 / 保存;
-     *  - read-only (opened from the floating ball): no footer at all, the only
-     *    way out is the × in the top-right corner.
+     * Note detail. Three shapes share one shell:
+     *  - editable (the board's double-click): textarea + 删除 / 字数 / 关闭 / 保存;
+     *  - read-only (opened from the floating ball): no footer, × is the only way out;
+     *  - read-only that the user turns into an editor with the pencil: textarea +
+     *    字数 / 保存 only — no 删除, no 关闭, and **saving returns to the read-only
+     *    view instead of closing the dialog**.
      */
     function DetailDialog({ note, onClose, onSave, onDelete, readOnly }) {
       const [text, setText] = useState(note.text)
       const [busy, setBusy] = useState(false)
+      // Only meaningful for the read-only variant: the pencil flips it on.
+      const [editing, setEditing] = useState(false)
       const ref = useRef(null)
       const colTitle = (COLUMNS.find((item) => item.id === note.col) || {}).title || ''
       const dirty = text !== note.text
-      const drag = useDraggable(true, { ignoreSelector: '.dsn-x' })
+      const isEditing = readOnly ? editing : true
+      // Controls inside the drag handle must opt out, or pointer capture eats
+      // their click (see 4.13 / 7.x): .dsn-x and the pencil are both controls.
+      const drag = useDraggable(true, { ignoreSelector: '.dsn-x, .dsn-edit' })
+
+      // A save updates `note` from the store; drop the stale draft so the next
+      // pencil click starts from the saved text, and the counter resets.
+      useEffect(() => {
+        setText(note.text)
+      }, [note.text])
 
       useEffect(() => {
-        if (readOnly) return
-        if (ref.current) ref.current.focus()
-      }, [readOnly])
+        if (isEditing && ref.current) ref.current.focus()
+      }, [isEditing])
 
       const save = useCallback(async () => {
         const value = text.slice(0, MAX_TEXT)
         if (value.trim() === '' || busy) return
         setBusy(true)
         try {
-          await onSave(note.id, value)
-          onClose()
+          const ok = await onSave(note.id, value)
+          if (ok === false) return // stay in edit mode; nothing was written
+          if (readOnly) setEditing(false)
+          else onClose()
         } finally {
           setBusy(false)
         }
-      }, [text, busy, note.id, onSave, onClose])
+      }, [text, busy, note.id, onSave, onClose, readOnly])
 
-      const body = readOnly
-        ? h('div', { className: 'dsn-paper dsn-readonly', tabIndex: 0 }, note.text)
-        : h('textarea', {
+      const body = isEditing
+        ? h('textarea', {
           ref,
           className: 'dsn-paper',
           value: text,
@@ -855,13 +887,41 @@ window.__ModuleLoader__.load({
           onKeyDown: (event) => {
             if (event.key === 'Escape') {
               event.preventDefault()
-              onClose()
+              // In the ball's dialog Esc leaves edit mode first; the dialog
+              // itself is closed with the ×, so a stray Esc never loses text.
+              if (readOnly) {
+                setText(note.text)
+                setEditing(false)
+              } else {
+                onClose()
+              }
             } else if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
               event.preventDefault()
               save()
             }
           },
         })
+        : h('div', { className: 'dsn-paper dsn-readonly', tabIndex: 0 }, note.text)
+
+      let footer = null
+      if (isEditing) {
+        footer = readOnly
+          // Ball editor: 字数 on the left, 保存 on the right. No 删除, no 关闭.
+          ? h('div', { className: 'dsn-foot' },
+            h('span', { className: 'dsn-hint' }, text.length + ' / ' + MAX_TEXT),
+            h('div', { className: 'dsn-right' },
+              h('button', { type: 'button', className: 'dsn-btn primary', disabled: busy || !dirty, onClick: save }, '保存'),
+            ),
+          )
+          : h('div', { className: 'dsn-foot' },
+            h('button', { type: 'button', className: 'dsn-btn danger', onClick: () => { onDelete(note.id); onClose() } }, '删除'),
+            h('span', { className: 'dsn-hint', style: { marginLeft: 12 } }, text.length + ' / ' + MAX_TEXT),
+            h('div', { className: 'dsn-right' },
+              h('button', { type: 'button', className: 'dsn-btn ghost', onClick: onClose }, '关闭'),
+              h('button', { type: 'button', className: 'dsn-btn primary', disabled: busy || !dirty, onClick: save }, '保存'),
+            ),
+          )
+      }
 
       return h('div', { className: 'dsn-overlay', onMouseDown: (event) => { if (event.target === event.currentTarget) onClose() } },
         h('div', Object.assign({
@@ -872,6 +932,19 @@ window.__ModuleLoader__.load({
         }, drag.boxProps),
           h('div', Object.assign({ className: 'dsn-dhead' }, drag.handleProps),
             h('div', { className: 'dsn-dtitle' }, '便签详情'),
+            // The pencil only exists on the ball's read-only detail, and it
+            // hides while editing (clicking it then would do nothing).
+            readOnly && !editing
+              ? h('button', {
+                type: 'button',
+                className: 'dsn-edit',
+                'aria-label': '编辑便签',
+                title: '编辑',
+                onClick: () => setEditing(true),
+              }, h('svg', { viewBox: '0 0 12 12' },
+                h('path', { d: 'M8.2 1.8 10.2 3.8 4.4 9.6 1.9 10.1 2.4 7.6z' }),
+                h('path', { d: 'M7.1 2.9 9.1 4.9' })))
+              : null,
             h('button', { type: 'button', className: 'dsn-x', 'aria-label': '关闭', onClick: onClose }, '✕'),
           ),
           h('div', { className: 'dsn-meta' },
@@ -879,17 +952,7 @@ window.__ModuleLoader__.load({
             h('span', { className: 'dsn-time' }, '创建于 ' + formatTime(note.createdAt) + ' · 最后修改 ' + formatTime(note.updatedAt)),
           ),
           body,
-          // Read-only mode has no footer: the × is the only way out.
-          readOnly
-            ? null
-            : h('div', { className: 'dsn-foot' },
-              h('button', { type: 'button', className: 'dsn-btn danger', onClick: () => { onDelete(note.id); onClose() } }, '删除'),
-              h('span', { className: 'dsn-hint', style: { marginLeft: 12 } }, text.length + ' / ' + MAX_TEXT),
-              h('div', { className: 'dsn-right' },
-                h('button', { type: 'button', className: 'dsn-btn ghost', onClick: onClose }, '关闭'),
-                h('button', { type: 'button', className: 'dsn-btn primary', disabled: busy || !dirty, onClick: save }, '保存'),
-              ),
-            ),
+          footer,
         ),
       )
     }
