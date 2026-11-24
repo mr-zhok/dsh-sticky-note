@@ -73,6 +73,12 @@ window.__ModuleLoader__.load({
 .dsn-edit:hover{background:rgba(53,196,106,.22);border-color:rgba(53,196,106,.8)}
 .dsn-edit:focus-visible{outline:2px solid rgba(53,196,106,.75);outline-offset:2px}
 .dsn-edit svg{width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+/* 回退：紧跟铅笔，中性描边。刻意不用绿色，和编辑键分出主次。 */
+.dsn-back{width:22px;height:22px;border-radius:6px;flex:0 0 22px;display:flex;align-items:center;justify-content:center;margin-left:2px;
+  border:1px solid rgba(255,255,255,.16);background:transparent;color:#C6CCD2;cursor:pointer;padding:0;transition:background .15s,border-color .15s,color .15s}
+.dsn-back:hover{background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.34);color:#fff}
+.dsn-back:focus-visible{outline:2px solid rgba(255,255,255,.45);outline-offset:2px}
+.dsn-back svg{width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
 .dsn-dsub{font-size:12px;color:var(--dsw-alias-label-secondary);margin:4px 0 14px}
 .dsn-paper{display:block;width:100%;height:338px;box-sizing:border-box;background:#FFF7BC;border:1px solid #E4D089;border-radius:3px;padding:12px 14px;color:#4A4433;font-size:13px;line-height:22px;font-family:inherit;resize:none;outline:none;white-space:pre-wrap}
 .dsn-paper::placeholder{color:#9D9166}
@@ -127,6 +133,9 @@ window.__ModuleLoader__.load({
   display:-webkit-box;-webkit-line-clamp:8;-webkit-box-orient:vertical;overflow:hidden}
 .dsn-pop-note .fd{position:absolute;top:0;right:0;width:14px;height:14px;background:#E4D089;
   clip-path:polygon(100% 0,0 0,100% 100%)}
+/* 从详情回退时标出「刚才看的是这张」。网格带 overflow:hidden，outline 会被裁掉，
+   所以用内阴影画框，画在纸面里面。 */
+.dsn-pop-note.picked{box-shadow:0 1px 1px rgba(0,0,0,.4),0 5px 12px rgba(0,0,0,.22),inset 0 0 0 2px rgba(53,196,106,.95)}
 .dsn-pop-empty{grid-column:1 / -1;position:relative;height:322px;display:flex;flex-direction:column;
   align-items:center;justify-content:center;gap:13px;border:0;background:transparent;padding:0;margin:0;
   cursor:pointer;font-family:inherit;color:var(--dsw-alias-label-primary)}
@@ -309,9 +318,13 @@ window.__ModuleLoader__.load({
     function FloatingBall({ ui, notes, onSetUi }) {
       const [open, setOpen] = useState(false)
       const [detailId, setDetailId] = useState(null)
+      // The card the detail was opened from: highlighted once ← goes back.
+      const [pickedId, setPickedId] = useState(null)
       const [addCol, setAddCol] = useState(null)
       const [colIndex, setColIndex] = useState(1)
       const [rowOffset, setRowOffset] = useState(0)
+      // Absolute spot the panel was dragged to (null = still anchored to the ball).
+      const [popAt, setPopAt] = useState(null)
       const [pos, setPos] = useState(() => {
         const fallback = defaultBall()
         return {
@@ -323,8 +336,6 @@ window.__ModuleLoader__.load({
       const movedRef = useRef(false)
       const popRef = useRef(null)
       const ballRef = useRef(null)
-      // The header's ＋ is a control, not a drag handle: it must keep its click.
-      const drag = useDraggable(open, { ref: popRef, resetKey: open, ignoreSelector: '.dsn-nav, .dsn-plus' })
 
       const col = COLUMNS[colIndex]
       const items = useMemo(
@@ -338,6 +349,39 @@ window.__ModuleLoader__.load({
       // for display so the grid never renders empty.
       const offset = Math.min(rowOffset, maxOffset)
       const visible = items.slice(offset * 2, offset * 2 + 4)
+
+      const viewportW = () => (typeof window === 'undefined' ? 1280 : window.innerWidth)
+      const viewportH = () => (typeof window === 'undefined' ? 800 : window.innerHeight)
+      // Expand upward by default; flip below when the ball sits in the upper half.
+      const popHeight = 400
+      const placeAbove = pos.y + BALL_SIZE / 2 > viewportH() / 2
+      const anchorTop = placeAbove ? Math.max(8, pos.y - POP_GAP - popHeight) : pos.y + BALL_SIZE + POP_GAP
+      const anchorLeft = Math.max(8, Math.min(pos.x + BALL_SIZE - POP_WIDTH, viewportW() - POP_WIDTH - 8))
+      // Once dragged, the panel stops following the ball: it owns an absolute
+      // spot, so moving the ball later leaves the placed panel exactly where it
+      // is (and ← back to the list returns to that spot too).
+      const left = popAt ? popAt.x : anchorLeft
+      const top = popAt ? popAt.y : anchorTop
+
+      // Fold a finished drag into an absolute position, clamped to the viewport.
+      const commitPopDrag = useCallback((moved) => {
+        setPopAt((current) => {
+          const base = current || { x: anchorLeft, y: anchorTop }
+          const w = viewportW()
+          const h = viewportH()
+          return {
+            x: Math.min(Math.max(8 - w, base.x + moved.x), Math.max(8, w - 120)),
+            y: Math.min(Math.max(8 - h, base.y + moved.y), Math.max(8, h - 120)),
+          }
+        })
+      }, [anchorLeft, anchorTop])
+
+      // The header's ＋ is a control, not a drag handle: it must keep its click.
+      const drag = useDraggable(open, {
+        ref: popRef,
+        ignoreSelector: '.dsn-nav, .dsn-plus',
+        onCommit: commitPopDrag,
+      })
 
       // A stored position that no longer fits (window shrank) snaps back in.
       useEffect(() => {
@@ -395,6 +439,15 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         setRowOffset(0)
       }, [colIndex])
+
+      // "One step back": close the detail and reopen the note list it came from.
+      // `colIndex` / `rowOffset` were never cleared, so the list lands on exactly
+      // the column and page the user left, with the card they read highlighted.
+      const backToList = useCallback(() => {
+        setPickedId(detailId)
+        setDetailId(null)
+        setOpen(true)
+      }, [detailId])
 
       const onPointerDown = useCallback((event) => {
         if (event.button !== 0) return
@@ -479,12 +532,6 @@ window.__ModuleLoader__.load({
       const canLeft = colIndex > 0
       const canRight = colIndex < COLUMNS.length - 1
 
-      // Expand upward by default; flip below when the ball sits in the upper half.
-      const popHeight = 400
-      const placeAbove = pos.y + BALL_SIZE / 2 > (typeof window === 'undefined' ? 800 : window.innerHeight) / 2
-      const top = placeAbove ? Math.max(8, pos.y - POP_GAP - popHeight) : pos.y + BALL_SIZE + POP_GAP
-      const left = Math.max(8, Math.min(pos.x + BALL_SIZE - POP_WIDTH, (typeof window === 'undefined' ? 1280 : window.innerWidth) - POP_WIDTH - 8))
-
       return h(React.Fragment, null,
         open
           ? h('div', Object.assign({
@@ -542,9 +589,10 @@ window.__ModuleLoader__.load({
                 )
                 : visible.map((note) => h('div', {
                   key: note.id,
-                  className: 'dsn-pop-note',
+                  className: 'dsn-pop-note' + (note.id === pickedId ? ' picked' : ''),
                   title: note.text,
                   onClick: () => {
+                    setPickedId(note.id)
                     setOpen(false)
                     setDetailId(note.id)
                   },
@@ -584,6 +632,7 @@ window.__ModuleLoader__.load({
           ? h(DetailDialog, {
             note: detailNote,
             readOnly: true,
+            onBack: backToList,
             onClose: () => setDetailId(null),
             onSave: saveEdit,
           })
@@ -708,7 +757,9 @@ window.__ModuleLoader__.load({
         }
       }, [text, busy, col, onSave, onClose])
 
-      return h('div', { className: 'dsn-overlay', onMouseDown: (event) => { if (event.target === event.currentTarget) onClose() } },
+      // No close-on-mask-click (1.3.1): a stray click must not throw away a draft.
+      // 取消 / ✕ / Esc are the ways out.
+      return h('div', { className: 'dsn-overlay' },
         h('div', Object.assign({
           className: 'dsn-dialog',
           role: 'dialog',
@@ -755,6 +806,11 @@ window.__ModuleLoader__.load({
      * `offset` starts at 0,0 (the box sits where CSS centers/anchors it) and the
      * returned style shifts it from there, clamped so the box cannot leave the
      * viewport. `handleProps` goes on the header; `style` goes on the box.
+     *
+     * `onCommit` turns the drag into a real move: it receives the final offset
+     * on pointerup and the hook drops back to 0,0. The ball popover uses it to
+     * fold the drag into an absolute position, so moving the ball afterwards
+     * cannot shift a panel the user has already placed.
      */
     function useDraggable(isEnabled, options) {
       const opts = options || {}
@@ -763,6 +819,9 @@ window.__ModuleLoader__.load({
       // Callers that need the node for their own hit-testing pass their ref in.
       const localRef = useRef(null)
       const boxRef = opts.ref || localRef
+      // pointermove updates state asynchronously; pointerup needs the value now.
+      const offsetRef = useRef(offset)
+      offsetRef.current = offset
 
       // A reopened popover must sit where it was placed, not where it was dragged.
       const resetKey = opts.resetKey
@@ -779,12 +838,23 @@ window.__ModuleLoader__.load({
         const box = boxRef.current
         if (!box) return
         const rect = box.getBoundingClientRect()
+        // `rect` already includes the current transform; the legal offset range
+        // is measured from the *untranslated* box, so strip `offset` first.
+        // Using the transformed rect directly counted the origin twice and made
+        // the second drag of an already-moved box jump on its first pointermove.
+        const baseLeft = rect.left - offset.x
+        const baseTop = rect.top - offset.y
+        const baseRight = rect.right - offset.x
+        const baseBottom = rect.bottom - offset.y
         dragRef.current = {
           startX: event.clientX,
           startY: event.clientY,
           originX: offset.x,
           originY: offset.y,
-          rect,
+          minX: -baseLeft,
+          maxX: window.innerWidth - baseRight,
+          minY: -baseTop,
+          maxY: window.innerHeight - baseBottom,
         }
         try {
           event.currentTarget.setPointerCapture(event.pointerId)
@@ -796,15 +866,12 @@ window.__ModuleLoader__.load({
       const onPointerMove = useCallback((event) => {
         const drag = dragRef.current
         if (!drag) return
-        // Keep the box's real edges inside the viewport, whatever its size is.
-        const minX = -drag.rect.left
-        const maxX = window.innerWidth - drag.rect.right
-        const minY = -drag.rect.top
-        const maxY = window.innerHeight - drag.rect.bottom
-        setOffset({
-          x: Math.min(Math.max(minX, drag.originX + (event.clientX - drag.startX)), maxX),
-          y: Math.min(Math.max(minY, drag.originY + (event.clientY - drag.startY)), maxY),
-        })
+        const next = {
+          x: Math.min(Math.max(drag.minX, drag.originX + (event.clientX - drag.startX)), drag.maxX),
+          y: Math.min(Math.max(drag.minY, drag.originY + (event.clientY - drag.startY)), drag.maxY),
+        }
+        offsetRef.current = next
+        setOffset(next)
       }, [])
 
       const onPointerUp = useCallback((event) => {
@@ -815,7 +882,11 @@ window.__ModuleLoader__.load({
         } catch {
           /* ignore */
         }
-      }, [])
+        if (!opts.onCommit) return
+        const moved = offsetRef.current
+        if (moved.x !== 0 || moved.y !== 0) opts.onCommit(moved)
+        setOffset((current) => (current.x === 0 && current.y === 0 ? current : { x: 0, y: 0 }))
+      }, [opts.onCommit])
 
       return {
         handleProps: {
@@ -839,8 +910,12 @@ window.__ModuleLoader__.load({
      *  - read-only that the user turns into an editor with the pencil: textarea +
      *    字数 / 保存 only — no 删除, no 关闭, and **saving returns to the read-only
      *    view instead of closing the dialog**.
+     *
+     * Clicking the mask does NOT close it (1.3.1): a dialog holding a draft is too
+     * easy to lose with a stray click. `onBack` adds the ← that returns to the
+     * ball's note list, one step back from where it was opened.
      */
-    function DetailDialog({ note, onClose, onSave, onDelete, readOnly }) {
+    function DetailDialog({ note, onClose, onSave, onDelete, readOnly, onBack }) {
       const [text, setText] = useState(note.text)
       const [busy, setBusy] = useState(false)
       // Only meaningful for the read-only variant: the pencil flips it on.
@@ -851,7 +926,7 @@ window.__ModuleLoader__.load({
       const isEditing = readOnly ? editing : true
       // Controls inside the drag handle must opt out, or pointer capture eats
       // their click (see 4.13 / 7.x): .dsn-x and the pencil are both controls.
-      const drag = useDraggable(true, { ignoreSelector: '.dsn-x, .dsn-edit' })
+      const drag = useDraggable(true, { ignoreSelector: '.dsn-x, .dsn-edit, .dsn-back' })
 
       // A save updates `note` from the store; drop the stale draft so the next
       // pencil click starts from the saved text, and the counter resets.
@@ -862,6 +937,20 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         if (isEditing && ref.current) ref.current.focus()
       }, [isEditing])
+
+      // Read-only detail opened from the ball: Esc is the same "one step back"
+      // as the ← button. While editing, the textarea's own Esc (discard draft)
+      // wins, so this listener stays out of the way.
+      useEffect(() => {
+        if (!readOnly || isEditing) return undefined
+        const onKey = (event) => {
+          if (event.key !== 'Escape') return
+          if (onBack) onBack()
+          else onClose()
+        }
+        window.addEventListener('keydown', onKey)
+        return () => window.removeEventListener('keydown', onKey)
+      }, [readOnly, isEditing, onBack, onClose])
 
       const save = useCallback(async () => {
         const value = text.slice(0, MAX_TEXT)
@@ -923,7 +1012,7 @@ window.__ModuleLoader__.load({
           )
       }
 
-      return h('div', { className: 'dsn-overlay', onMouseDown: (event) => { if (event.target === event.currentTarget) onClose() } },
+      return h('div', { className: 'dsn-overlay' },
         h('div', Object.assign({
           className: 'dsn-dialog',
           role: 'dialog',
@@ -944,6 +1033,20 @@ window.__ModuleLoader__.load({
               }, h('svg', { viewBox: '0 0 12 12' },
                 h('path', { d: 'M8.2 1.8 10.2 3.8 4.4 9.6 1.9 10.1 2.4 7.6z' }),
                 h('path', { d: 'M7.1 2.9 9.1 4.9' })))
+              : null,
+            // ← returns to the note list one step back. Only the ball's detail
+            // has a previous layer, and it hides while editing so a draft is
+            // never one accidental click away from being dropped.
+            onBack && readOnly && !editing
+              ? h('button', {
+                type: 'button',
+                className: 'dsn-back',
+                'aria-label': '返回便签列表',
+                title: '返回便签列表',
+                onClick: onBack,
+              }, h('svg', { viewBox: '0 0 12 12' },
+                h('path', { d: 'M9.8 6H2.8' }),
+                h('path', { d: 'M5.8 3 2.8 6l3 3' })))
               : null,
             h('button', { type: 'button', className: 'dsn-x', 'aria-label': '关闭', onClick: onClose }, '✕'),
           ),
